@@ -1,0 +1,1 @@
+{"type": "yolo_nas_s", "original_insz": [1, 3, 640, 640], "iou_thres": 0.65, "score_thres": 0.5, "prep_steps": [null, {"DetLongMaxRescale": null}, {"DetLongMaxRescale": null}, {"BotRightPad": {"pad_value": 114}}, null], "labels": ["hand", "person", "phone", "ruler", "weapon"]}
