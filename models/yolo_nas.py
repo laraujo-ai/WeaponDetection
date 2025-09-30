@@ -111,8 +111,8 @@ class YOLONasDetector(IObjectDetector):
         if len(outputs) < 2:
             return np.zeros((0, 6), dtype=np.float32)
 
-        raw_boxes = np.squeeze(outputs[0])  
-        scores = np.squeeze(outputs[1])     
+        raw_boxes = np.squeeze(outputs[0]).astype(np.float32)  
+        scores = np.squeeze(outputs[1]).astype(np.float32)     
 
         for meta in reversed(metadata):
             if "padding" in meta:

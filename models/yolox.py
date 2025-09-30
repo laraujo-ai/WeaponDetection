@@ -90,7 +90,7 @@ class YOLOXDetector(IObjectDetector):
         if inp.dtype != np.float32:
             inp = inp.astype(np.float32)
 
-        raw_output = self._model_engine.run(None, {self.input_name: inp.astype(np.float16)})[0] #batch size 1
+        raw_output = self._model_engine.run(None, {self.input_name: inp.astype(np.float16)})[0].astype(np.float32)
         detections = self._postprocess(raw_output, ratio, score_threshold=score_thr, nms_threshold=nms_thr)
         if detections is None or len(detections) == 0:
             return np.array([])
