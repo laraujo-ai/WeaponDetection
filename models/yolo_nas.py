@@ -30,10 +30,8 @@ class YOLONasDetector(IObjectDetector):
             providers (List[str], optional): ONNX Runtime execution providers.
                                              Defaults to ["CUDAExecutionProvider", "CPUExecutionProvider"].
         """
-        if providers is None:
-            providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
-        self.model = ort.InferenceSession(model_path, providers=providers)
-        
+        self.model = self.load_model(model_path, providers)
+
         # Get model input details
         inp = self.model.get_inputs()[0]
         self.input_name = inp.name
@@ -45,6 +43,15 @@ class YOLONasDetector(IObjectDetector):
         
         # Get model output names
         self.output_names = [o.name for o in self.model.get_outputs()]
+
+
+    def load_model(self, model_path: str, providers):
+        session_options = ort.SessionOptions()
+        session_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+        session_options.intra_op_num_threads = 1  
+        session = ort.InferenceSession(model_path, sess_options=session_options, providers=providers)
+        return session
+
 
     # ---------- Preprocessing ----------
     def _det_long_max_rescale(self, img: np.ndarray) -> Tuple[np.ndarray, dict]:

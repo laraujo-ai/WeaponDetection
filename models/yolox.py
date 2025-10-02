@@ -6,35 +6,15 @@ from models.functions import xywh_to_xyxy, multiclass_nms_class_agnostic
 import cv2
 
 class YOLOXDetector(IObjectDetector):
-    def __init__(self, model_path: str):
-        self._model_engine = self.load_model(model_path)
+    def __init__(self, model_path: str, providers : list):
+        self._model_engine = self.load_model(model_path, providers)
         self.input_name = self._model_engine.get_inputs()[0].name
         self.input_shape = self._model_engine.get_inputs()[0].shape[2:]
         
-    def load_model(self, model_path: str):
-        providers = [
-            ('TensorrtExecutionProvider', {
-                'device_id': 0,
-                'trt_max_workspace_size': 2147483648,
-                'trt_fp16_enable': True,
-                'trt_builder_optimization_level': 0,
-                # enable engine caching so engines are persisted and reused
-                'trt_engine_cache_enable': True,
-                'trt_engine_cache_path': './trt_cache',
-            }),
-            # Fallback to CUDA if TensorRT fails
-            ('CUDAExecutionProvider', {
-                'device_id': 0,                                    
-                'arena_extend_strategy': 'kNextPowerOfTwo',       
-                'gpu_mem_limit': 2 * 1024 * 1024 * 1024,         
-                'cudnn_conv_algo_search': 'EXHAUSTIVE',
-                'do_copy_in_default_stream': True,
-            }),
-            'CPUExecutionProvider'
-        ]
+    def load_model(self, model_path: str, providers : list):
         session_options = ort.SessionOptions()
         session_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-        session_options.intra_op_num_threads = 1  # Limit to 1 thread for consistency
+        session_options.intra_op_num_threads = 1 
         session = ort.InferenceSession(model_path, sess_options=session_options, providers=providers)
         return session
 

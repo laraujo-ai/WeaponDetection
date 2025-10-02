@@ -18,7 +18,19 @@ from super_gradients.training.models.detection_models.pp_yolo_e import (
 
 
 def parse_args() -> argparse.Namespace:
-    """Parse command line arguments."""
+    """Parse command line arguments for training configuration.
+
+    Returns:
+        argparse.Namespace: Parsed arguments containing:
+            - data_dir: Root dataset folder path
+            - classes: Comma-separated class names
+            - model_arch: Model architecture (default: 'yolo_nas_s')
+            - batch_size: Training batch size (default: 32)
+            - num_epochs: Number of training epochs (default: 100)
+            - checkpoint_dir: Checkpoint output directory
+            - experiment_name: Experiment identifier (default: 'sg_experiment')
+            - num_workers: DataLoader worker processes (default: 4)
+    """
     p = argparse.ArgumentParser(description="Train detector with SuperGradients.")
     p.add_argument("--data-dir", required=True, type=str, help="Root dataset folder.")
     p.add_argument(
@@ -37,7 +49,19 @@ def parse_args() -> argparse.Namespace:
 
 
 def prepare_dataset_params(data_dir: str, classes: List[str]) -> dict:
-    """Build dataset parameter dictionary for SuperGradients dataloaders."""
+    """Build dataset parameter dictionary for SuperGradients dataloaders.
+
+    Args:
+        data_dir: Root directory containing train/valid/test subdirectories.
+        classes: List of class names for object detection.
+
+    Returns:
+        dict: Dataset parameters with structure:
+            - data_dir: Expanded absolute path to dataset root
+            - train/val/test_images_dir: Relative paths to image folders
+            - train/val/test_labels_dir: Relative paths to label folders
+            - classes: List of class names
+    """
     data_dir = str(Path(data_dir).expanduser())
     return {
         "data_dir": data_dir,
@@ -52,13 +76,31 @@ def prepare_dataset_params(data_dir: str, classes: List[str]) -> dict:
 
 
 def build_model(model_arch: str, num_classes: int, device: torch.device) -> torch.nn.Module:
-    """Instantiate model from SuperGradients models registry."""
+    """Instantiate model from SuperGradients models registry.
+
+    Args:
+        model_arch: Architecture name (e.g., 'yolo_nas_s', 'yolo_nas_m', 'yolo_nas_l').
+        num_classes: Number of object detection classes.
+        device: Target device (CPU or CUDA).
+
+    Returns:
+        torch.nn.Module: Model instance moved to specified device.
+    """
     model = models.get(model_arch, num_classes=num_classes, pretrained_weights=None)
     return model.to(device)
 
 
 def build_dataloaders(dataset_params: dict, batch_size: int, num_workers: int):
-    """Create train and validation dataloaders (SuperGradients coco-yolo format)."""
+    """Create train and validation dataloaders in COCO-YOLO format.
+
+    Args:
+        dataset_params: Dataset configuration dict from prepare_dataset_params().
+        batch_size: Number of samples per batch.
+        num_workers: Number of worker processes for data loading.
+
+    Returns:
+        tuple: (train_loader, val_loader) - PyTorch DataLoader instances.
+    """
     train_loader = coco_detection_yolo_format_train(
         dataset_params={
             "data_dir": dataset_params["data_dir"],
@@ -83,7 +125,20 @@ def build_dataloaders(dataset_params: dict, batch_size: int, num_workers: int):
 
 
 def build_train_params(num_epochs: int, num_classes: int) -> dict:
-    """Construct training parameters dict for Trainer.train()."""
+    """Construct training parameters dict for SuperGradients Trainer.
+
+    Args:
+        num_epochs: Maximum number of training epochs.
+        num_classes: Number of object detection classes.
+
+    Returns:
+        dict: Training configuration including:
+            - Learning rate schedule (cosine with linear warmup)
+            - SGD optimizer with momentum 0.9
+            - PPYoloE loss function
+            - mAP@0.50 validation metric
+            - EMA and mixed precision enabled
+    """
     return {
         "silent_mode": False,
         "average_best_models": False,
@@ -118,7 +173,18 @@ def build_train_params(num_epochs: int, num_classes: int) -> dict:
 
 
 def main() -> None:
-    """Main entry point: parse args, build data, model, and run training."""
+    """Main entry point: parse arguments, build dataset/model, and run training.
+
+    Workflow:
+        1. Parse command-line arguments
+        2. Validate class names and determine device (CUDA/CPU)
+        3. Prepare dataset parameters and dataloaders
+        4. Build model and training configuration
+        5. Initialize Trainer and start training loop
+
+    Raises:
+        SystemExit: If no class names are provided.
+    """
     args = parse_args()
 
     data_dir = args.data_dir
