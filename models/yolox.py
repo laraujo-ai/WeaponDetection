@@ -6,19 +6,49 @@ from models.functions import xywh_to_xyxy, multiclass_nms_class_agnostic
 import cv2
 
 class YOLOXDetector(IObjectDetector):
-    def __init__(self, model_path: str, providers : list):
+    """YOLOX object detector using ONNX Runtime.
+
+    Implements YOLOX preprocessing and postprocessing with anchor-free detection.
+    """
+
+    def __init__(self, model_path: str, providers: list):
+        """Initialize the YOLOX detector.
+
+        Args:
+            model_path: Path to the ONNX model file.
+            providers: ONNX Runtime execution providers.
+        """
         self._model_engine = self.load_model(model_path, providers)
         self.input_name = self._model_engine.get_inputs()[0].name
         self.input_shape = self._model_engine.get_inputs()[0].shape[2:]
-        
-    def load_model(self, model_path: str, providers : list):
+
+    def load_model(self, model_path: str, providers: list):
+        """Load ONNX model with optimized session settings.
+
+        Args:
+            model_path: Path to the ONNX model file.
+            providers: ONNX Runtime execution providers.
+
+        Returns:
+            ONNX Runtime inference session.
+        """
         session_options = ort.SessionOptions()
         session_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-        session_options.intra_op_num_threads = 1 
+        session_options.intra_op_num_threads = 1
         session = ort.InferenceSession(model_path, sess_options=session_options, providers=providers)
         return session
 
     def _preprocess(self, ori_frame):
+        """Preprocess image for model inference.
+
+        Resizes and pads image to model input size while maintaining aspect ratio.
+
+        Args:
+            ori_frame: Original input image.
+
+        Returns:
+            Tuple of preprocessed image array and resize ratio.
+        """
         target_h, target_w = self.input_shape
         padded_img = np.ones((target_h, target_w, 3), dtype=np.uint8) * 114
         r = min(target_h / ori_frame.shape[0], target_w / ori_frame.shape[1])
@@ -34,6 +64,19 @@ class YOLOXDetector(IObjectDetector):
         return padded_img, r
 
     def _postprocess(self, outputs, ratio, score_threshold=0.25, nms_threshold=0.45):
+        """Postprocess model outputs to final detections.
+
+        Decodes anchor-free outputs and applies NMS.
+
+        Args:
+            outputs: Raw outputs from ONNX model.
+            ratio: Resize ratio from preprocessing.
+            score_threshold: Confidence score threshold.
+            nms_threshold: NMS IoU threshold.
+
+        Returns:
+            Array of detections with shape (N, 6): [x, y, w, h, score, class_id].
+        """
         grids, expanded_strides = [], []
         strides = [8, 16, 32]
         hsizes = [self.input_shape[0] // stride for stride in strides]
@@ -64,7 +107,17 @@ class YOLOXDetector(IObjectDetector):
         )
         return dets
 
-    def detect(self, image, score_thr:float = 0.25 , nms_thr : float = 0.45):
+    def detect(self, image, score_thr: float = 0.25, nms_thr: float = 0.45):
+        """Perform object detection on an image.
+
+        Args:
+            image: Input image in BGR format.
+            score_thr: Confidence score threshold for filtering detections.
+            nms_thr: IoU threshold for Non-Maximum Suppression.
+
+        Returns:
+            Array of detections with shape (N, 6): [x, y, w, h, score, class_id].
+        """
         preprocessed_image, ratio = self._preprocess(image)
         inp = preprocessed_image[None]
         if inp.dtype != np.float32:

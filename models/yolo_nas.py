@@ -6,124 +6,115 @@ from typing import Tuple, List, Any
 from models.base import IObjectDetector
 
 class YOLONasDetector(IObjectDetector):
-    """
-    YOLO-NAS ONNX detector that precisely follows the SuperGradients processing pipeline.
+    """YOLO-NAS object detector using ONNX Runtime.
 
-    This class corrects the original implementation by removing heuristics and instead
-    faithfully reproducing the preprocessing steps (DetLongMaxRescale, CenterPad/BotRightPad)
-    and their corresponding inverse operations in postprocessing. This ensures accurate
-    bounding box coordinates on the original image.
-
-    Key features:
-      - Implements the exact preprocessing logic used during YOLO-NAS training.
-      - Correctly reverses the padding and scaling operations on output boxes.
-      - Performs standard multi-class Non-Maximum Suppression (NMS).
-      - Returns detections as a clean (N, 6) NumPy array: [x1, y1, w, h, score, class_id].
+    Implements the SuperGradients YOLO-NAS preprocessing and postprocessing pipeline.
     """
 
     def __init__(self, model_path: str, providers: List[str] = None):
-        """
-        Initializes the YOLO-NAS detector.
+        """Initialize the YOLO-NAS detector.
 
         Args:
-            model_path (str): Path to the ONNX model file.
-            providers (List[str], optional): ONNX Runtime execution providers.
-                                             Defaults to ["CUDAExecutionProvider", "CPUExecutionProvider"].
+            model_path: Path to the ONNX model file.
+            providers: ONNX Runtime execution providers.
         """
         self.model = self.load_model(model_path, providers)
-
-        # Get model input details
         inp = self.model.get_inputs()[0]
         self.input_name = inp.name
-        shape = inp.shape  # Expected format [N, C, H, W]
+        shape = inp.shape
         self.in_c, self.in_h, self.in_w = map(int, shape[1:])
-
-        # Determine expected data type (float16 or float32)
         self.expected_dtype = np.float16 if "float16" in str(inp.type) else np.float32
-        
-        # Get model output names
         self.output_names = [o.name for o in self.model.get_outputs()]
 
-
     def load_model(self, model_path: str, providers):
+        """Load ONNX model with optimized session settings.
+
+        Args:
+            model_path: Path to the ONNX model file.
+            providers: ONNX Runtime execution providers.
+
+        Returns:
+            ONNX Runtime inference session.
+        """
         session_options = ort.SessionOptions()
         session_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-        session_options.intra_op_num_threads = 1  
+        session_options.intra_op_num_threads = 1
         session = ort.InferenceSession(model_path, sess_options=session_options, providers=providers)
         return session
 
-
-    # ---------- Preprocessing ----------
     def _det_long_max_rescale(self, img: np.ndarray) -> Tuple[np.ndarray, dict]:
-        """
-        Rescales the image, maintaining aspect ratio, so the longest side fits the model input size.
-        This implementation matches the official SuperGradients logic.
+        """Rescale image maintaining aspect ratio to fit model input size.
+
+        Args:
+            img: Input image as numpy array.
+
+        Returns:
+            Tuple of rescaled image and metadata dictionary.
         """
         h, w = img.shape[:2]
-        
-        # The `-4` margin is a subtle but important detail from the original implementation
         scale_factor = min((self.in_h - 4) / h, (self.in_w - 4) / w)
-        
+
         if scale_factor != 1.0:
             new_h, new_w = round(h * scale_factor), round(w * scale_factor)
             img = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
-            
+
         metadata = {"scale_factors": (scale_factor, scale_factor)}
         return img, metadata
 
-
     def _bot_right_pad(self, img, pad_value):
-        """Pad bottom and right only (place image on top left)"""
+        """Pad image to model input size on bottom and right sides.
+
+        Args:
+            img: Input image to pad.
+            pad_value: Pixel value to use for padding.
+
+        Returns:
+            Tuple of padded image and padding metadata.
+        """
         pad_height, pad_width = self.in_h - img.shape[0], self.in_w - img.shape[1]
         return cv2.copyMakeBorder(
             img, 0, pad_height, 0, pad_width, cv2.BORDER_CONSTANT, value=[pad_value] * img.shape[-1]
         ), {"padding": (0, pad_height, 0, pad_width)}
 
-
-        
     def _preprocess(self, image: np.ndarray) -> Tuple[np.ndarray, List[dict]]:
-        """
-        Runs the full preprocessing pipeline on an input image.
+        """Preprocess image for model inference.
 
         Args:
-            image (np.ndarray): The input image in BGR format.
+            image: Input image in BGR format.
 
         Returns:
-            Tuple containing the processed blob and a list of metadata dictionaries.
+            Tuple of preprocessed blob and list of metadata dictionaries.
         """
         metadata: List[dict] = []
         img, meta_rescale = self._det_long_max_rescale(image)
         metadata.append(meta_rescale)
         img, meta_pad = self._bot_right_pad(img, pad_value=114)
         metadata.append(meta_pad)
-        blob = cv2.dnn.blobFromImage(img, swapRB=True)        
+        blob = cv2.dnn.blobFromImage(img, swapRB=True)
         blob = blob.astype(self.expected_dtype)
         return blob, metadata
 
-    # ---------- Postprocessing ----------
     def _postprocess(self, outputs: List[Any], metadata: List[dict], score_thr: float, nms_thr: float) -> np.ndarray:
-        """
-        Runs the full postprocessing pipeline on the model's outputs.
+        """Postprocess model outputs to final detections.
 
         Args:
-            outputs (List[Any]): A list of raw outputs from the ONNX model.
-                                 Expected: [boxes, scores].
-            metadata (List[dict]): Metadata from the preprocessing steps.
-            score_thr (float): Threshold for filtering detections by score.
-            nms_thr (float): Threshold for Non-Maximum Suppression.
+            outputs: Raw outputs from ONNX model [boxes, scores].
+            metadata: Metadata from preprocessing steps.
+            score_thr: Confidence score threshold.
+            nms_thr: NMS IoU threshold.
 
         Returns:
-            np.ndarray: A (N, 6) array of final detections [x, y, w, h, score, class_id].
+            Array of detections with shape (N, 6): [x, y, w, h, score, class_id].
         """
         if len(outputs) < 2:
             return np.zeros((0, 6), dtype=np.float32)
 
-        raw_boxes = np.squeeze(outputs[0]).astype(np.float32)  
-        scores = np.squeeze(outputs[1]).astype(np.float32)     
+        raw_boxes = np.squeeze(outputs[0]).astype(np.float32)
+        scores = np.squeeze(outputs[1]).astype(np.float32)
 
         for meta in reversed(metadata):
             if "padding" in meta:
-                pad_top,_, pad_left, _ = meta["padding"]
+                pad_top, _, pad_left, _ = meta["padding"]
                 raw_boxes[:, [0, 2]] -= pad_left
                 raw_boxes[:, [1, 3]] -= pad_top
             elif "scale_factors" in meta:
@@ -154,27 +145,20 @@ class YOLONasDetector(IObjectDetector):
         return detections
 
     def detect(self, image: np.ndarray, score_thr: float = 0.25, nms_thr: float = 0.45) -> np.ndarray:
-        """
-        Performs end-to-end object detection on a single image.
+        """Perform object detection on an image.
 
         Args:
-            image (np.ndarray): The input image in BGR format.
-            score_thr (float): Confidence score threshold for filtering detections.
-            nms_thr (float): IOU threshold for Non-Maximum Suppression.
+            image: Input image in BGR format.
+            score_thr: Confidence score threshold for filtering detections.
+            nms_thr: IoU threshold for Non-Maximum Suppression.
 
         Returns:
-            np.ndarray: A (N, 6) array of detections [x, y, w, h, score, class_id].
+            Array of detections with shape (N, 6): [x, y, w, h, score, class_id].
         """
-        # Preprocess the image to get the input blob and metadata
         inp_blob, metadata = self._preprocess(image)
-
-        # Run inference
         outputs = self.model.run(None, {self.input_name: inp_blob})
-        
-        # Postprocess the outputs to get final detections
         detections = self._postprocess(outputs, metadata, score_thr, nms_thr)
-        
-        # Clip box coordinates to be within image dimensions
+
         orig_h, orig_w = image.shape[:2]
         detections[:, 0] = np.clip(detections[:, 0], 0, orig_w)
         detections[:, 1] = np.clip(detections[:, 1], 0, orig_h)
